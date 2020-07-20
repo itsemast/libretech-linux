@@ -1221,6 +1221,24 @@ static bool vop_crtc_is_tmds(struct drm_crtc *crtc)
 	return false;
 }
 
+static enum drm_mode_status vop_crtc_size_valid(struct drm_crtc *crtc,
+					const struct drm_display_mode *mode)
+{
+	struct vop *vop = to_vop(crtc);
+	const struct vop_rect *max_output = &vop->data->max_output;
+
+	if (max_output->width && max_output->height) {
+		/* only the size of the resulting rect matters */
+		if(drm_mode_validate_size(mode, max_output->width,
+					  max_output->height) != MODE_OK) {
+			return drm_mode_validate_size(mode, max_output->height,
+						      max_output->width);
+		}
+	}
+
+	return MODE_OK;
+}
+
 /*
  * The VESA DMT standard specifies a 0.5% pixel clock frequency tolerance.
  * The CVT spec reuses that tolerance in its examples.
@@ -1234,25 +1252,24 @@ static enum drm_mode_status vop_crtc_mode_valid(struct drm_crtc *crtc,
 	long rounded_rate;
 	long lowest, highest;
 
-	if (!vop_crtc_is_tmds(crtc))
-		return MODE_OK;
-
 	if (mode->flags & DRM_MODE_FLAG_INTERLACE)
-		return MODE_NO_INTERLACE;
+			return MODE_NO_INTERLACE;
 
-	rounded_rate = clk_round_rate(vop->dclk, mode->clock * 1000 + 999);
-	if (rounded_rate < 0)
-		return MODE_NOCLOCK;
+	if (vop_crtc_is_tmds(crtc)) {
+		rounded_rate = clk_round_rate(vop->dclk, mode->clock * 1000 + 999);
+		if (rounded_rate < 0)
+			return MODE_NOCLOCK;
 
-	lowest = mode->clock * (1000 - CLOCK_TOLERANCE_PER_MILLE);
-	if (rounded_rate < lowest)
-		return MODE_CLOCK_LOW;
+		lowest = mode->clock * (1000 - CLOCK_TOLERANCE_PER_MILLE);
+		if (rounded_rate < lowest)
+			return MODE_CLOCK_LOW;
 
-	highest = mode->clock * (1000 + CLOCK_TOLERANCE_PER_MILLE);
-	if (rounded_rate > highest)
-		return MODE_CLOCK_HIGH;
+		highest = mode->clock * (1000 + CLOCK_TOLERANCE_PER_MILLE);
+		if (rounded_rate > highest)
+			return MODE_CLOCK_HIGH;
+	}
 
-	return MODE_OK;
+	return vop_crtc_size_valid(crtc, mode);
 }
 
 static bool vop_crtc_mode_fixup(struct drm_crtc *crtc,
@@ -1261,6 +1278,9 @@ static bool vop_crtc_mode_fixup(struct drm_crtc *crtc,
 {
 	struct vop *vop = to_vop(crtc);
 	unsigned long rate;
+
+	if (vop_crtc_size_valid(crtc, adjusted_mode) != MODE_OK)
+		return false;
 
 	/*
 	 * Clock craziness.
